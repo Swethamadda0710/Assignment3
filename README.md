@@ -1,3 +1,12 @@
+---
+title: Frame Caption
+emoji: "🖼️"
+colorFrom: green
+colorTo: yellow
+sdk: docker
+app_port: 7860
+---
+
 # Frame / Caption
 
 A Flask image-captioning application using a downloaded pretrained vision-language checkpoint. Upload a JPG, PNG, or WEBP image and receive a natural-language caption.
