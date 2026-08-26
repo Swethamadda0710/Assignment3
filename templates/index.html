@@ -95,7 +95,7 @@
       data.append('image', selectedFile);
       
       try {
-        const response = await fetch('/caption', { method: 'POST', body: data, timeout: 300000 });
+        const response = await fetch('/caption', { method: 'POST', body: data });
         
         // Check Content-Type header
         const contentType = response.headers.get('content-type');
