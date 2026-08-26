@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frame / Caption</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Frame Caption home"><span class="brand-mark">F</span> FRAME / CAPTION</a>
+      <span class="model-tag">PRETRAINED VISION MODEL <i></i></span>
+    </header>
+
+    <section class="intro">
+      <p class="kicker">IMAGE TO LANGUAGE <span>•</span> 01</p>
+      <h1>Give your image<br><em>a voice.</em></h1>
+      <p class="lede">Drop in a photograph. A pretrained vision-language model will read its visual story and turn it into one clear sentence.</p>
+    </section>
+
+    <section class="workspace">
+      <div class="upload-panel" id="dropZone">
+        <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <div class="upload-empty" id="emptyState">
+          <div class="crosshair"><span></span></div>
+          <h2>Place an image here</h2>
+          <p>JPG, PNG, or WEBP <b>·</b> up to 8 MB</p>
+          <button class="choose-button" id="chooseButton" type="button"><span>+</span> Choose file</button>
+        </div>
+        <div class="preview-state" id="previewState" hidden>
+          <img id="preview" alt="Selected image preview">
+          <button class="remove-button" id="removeButton" type="button" aria-label="Remove selected image">×</button>
+          <div class="file-label" id="fileLabel"></div>
+        </div>
+      </div>
+
+      <div class="result-panel">
+        <div class="panel-heading"><span>GENERATED CAPTION</span><span class="status" id="status">WAITING</span></div>
+        <div class="caption-box" id="captionBox"><span class="quote-mark">“</span><p id="caption">Your caption will appear here.</p></div>
+        <button class="generate-button" id="generateButton" type="button" disabled>Generate caption <span>→</span></button>
+        <p class="error" id="error" role="alert"></p>
+      </div>
+    </section>
+
+    <footer><span>PRETRAINED VISION + TEXT DECODER</span><span>LOCAL INFERENCE · NO IMAGE STORAGE</span></footer>
+  </main>
+  <script>
+    const input = document.getElementById('imageInput');
+    const dropZone = document.getElementById('dropZone');
+    const empty = document.getElementById('emptyState');
+    const previewState = document.getElementById('previewState');
+    const preview = document.getElementById('preview');
+    const fileLabel = document.getElementById('fileLabel');
+    const choose = document.getElementById('chooseButton');
+    const remove = document.getElementById('removeButton');
+    const generate = document.getElementById('generateButton');
+    const caption = document.getElementById('caption');
+    const status = document.getElementById('status');
+    const error = document.getElementById('error');
+    let selectedFile = null;
+
+    choose.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => setFile(input.files[0]));
+    remove.addEventListener('click', clearFile);
+    ['dragenter', 'dragover'].forEach(event => dropZone.addEventListener(event, e => { e.preventDefault(); dropZone.classList.add('dragging'); }));
+    ['dragleave', 'drop'].forEach(event => dropZone.addEventListener(event, e => { e.preventDefault(); dropZone.classList.remove('dragging'); }));
+    dropZone.addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
+
+    function setFile(file) {
+      if (!file) return;
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) {
+        showError('Choose a JPG, PNG, or WEBP image under 8 MB.'); return;
+      }
+      selectedFile = file;
+      preview.src = URL.createObjectURL(file);
+      fileLabel.textContent = file.name;
+      empty.hidden = true; previewState.hidden = false; generate.disabled = false;
+      caption.textContent = 'Ready when you are.'; status.textContent = 'READY'; error.textContent = '';
+    }
+    function clearFile() { selectedFile = null; input.value = ''; empty.hidden = false; previewState.hidden = true; generate.disabled = true; status.textContent = 'WAITING'; caption.textContent = 'Your caption will appear here.'; }
+    function showError(message) { error.textContent = message; status.textContent = 'ERROR'; }
+
+    generate.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      generate.disabled = true; status.textContent = 'LOADING MODEL'; caption.textContent = 'The first caption may take a few minutes while the pretrained model loads...'; error.textContent = '';
+      const data = new FormData(); data.append('image', selectedFile);
+      try {
+        const response = await fetch('/caption', { method: 'POST', body: data });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not generate a caption.');
+        caption.textContent = result.caption; status.textContent = 'COMPLETE';
+      } catch (err) { caption.textContent = 'Your caption could not be generated.'; showError(err.message); }
+      finally { generate.disabled = false; }
+    });
+  </script>
+</body>
+</html>
