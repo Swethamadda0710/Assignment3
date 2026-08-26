@@ -86,15 +86,37 @@
 
     generate.addEventListener('click', async () => {
       if (!selectedFile) return;
-      generate.disabled = true; status.textContent = 'LOADING MODEL'; caption.textContent = 'The first caption may take a few minutes while the pretrained model loads...'; error.textContent = '';
-      const data = new FormData(); data.append('image', selectedFile);
+      generate.disabled = true; 
+      status.textContent = 'LOADING MODEL'; 
+      caption.textContent = 'The first caption may take a few minutes while the pretrained model loads...'; 
+      error.textContent = '';
+      
+      const data = new FormData(); 
+      data.append('image', selectedFile);
+      
       try {
-        const response = await fetch('/caption', { method: 'POST', body: data });
+        const response = await fetch('/caption', { method: 'POST', body: data, timeout: 300000 });
+        
+        // Check Content-Type header
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error(`Expected JSON response, got ${contentType}. Status: ${response.status}`);
+        }
+        
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Could not generate a caption.');
-        caption.textContent = result.caption; status.textContent = 'COMPLETE';
-      } catch (err) { caption.textContent = 'Your caption could not be generated.'; showError(err.message); }
-      finally { generate.disabled = false; }
+        
+        if (!response.ok) {
+          throw new Error(result.error || `Server error: ${response.status}`);
+        }
+        
+        caption.textContent = result.caption || 'No caption generated.'; 
+        status.textContent = 'COMPLETE';
+      } catch (err) { 
+        caption.textContent = 'Your caption could not be generated.'; 
+        showError(err.message || 'An unknown error occurred. Please try again.'); 
+      } finally { 
+        generate.disabled = false; 
+      }
     });
   </script>
 </body>
