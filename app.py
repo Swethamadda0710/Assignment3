@@ -71,10 +71,22 @@ def generate_caption(image: Image.Image) -> str:
         processor, model, device, torch = get_captioner()
         app.logger.info(f"Generating caption for image of size {image.size}...")
         
+        # Convert image to tensor and move to device
         inputs = processor(images=image, return_tensors="pt").to(device)
+        app.logger.info(f"Inputs prepared on device: {device}")
+        
+        # Generate caption with optimized parameters
         with torch.no_grad():
-            output = model.generate(**inputs, max_new_tokens=30, num_beams=5)
+            # Use num_beams=1 for faster inference on constrained hardware
+            output = model.generate(
+                **inputs, 
+                max_new_tokens=30, 
+                num_beams=1,  # Beam search disabled for faster inference
+                do_sample=False
+            )
+        
         caption = processor.decode(output[0], skip_special_tokens=True).strip()
+        app.logger.info(f"Raw caption: {caption}")
         
         # Ensure proper capitalization and punctuation
         if caption:
@@ -107,19 +119,29 @@ def caption():
     uploaded.save(image_path)
 
     try:
+        app.logger.info(f"Processing image: {uploaded.filename}")
         with Image.open(image_path) as source:
             image = source.convert("RGB")
+        app.logger.info(f"Image loaded, size: {image.size}")
+        
         result = generate_caption(image)
+        app.logger.info(f"Caption generated successfully: {result}")
         return jsonify(caption=result)
     except UnidentifiedImageError:
+        app.logger.warning(f"Invalid image file: {uploaded.filename}")
         return jsonify(error="That file is not a readable image."), 400
     except RuntimeError as exc:
+        app.logger.error(f"Model runtime error: {exc}")
         return jsonify(error=str(exc)), 503
     except Exception as exc:
-        app.logger.exception("Caption generation failed")
-        return jsonify(error=f"Caption generation failed: {str(exc)}"), 500
+        app.logger.exception(f"Unexpected error during caption generation")
+        error_msg = f"Caption generation failed: {type(exc).__name__}: {str(exc)}"
+        return jsonify(error=error_msg), 500
     finally:
-        image_path.unlink(missing_ok=True)
+        try:
+            image_path.unlink(missing_ok=True)
+        except Exception as e:
+            app.logger.warning(f"Failed to delete temp file: {e}")
 
 
 @app.errorhandler(404)
