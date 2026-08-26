@@ -41,7 +41,8 @@ def get_captioner():
         from transformers import BlipForConditionalGeneration, BlipProcessor
         import torch
 
-        model_id = "Salesforce/blip-image-captioning-base"
+        # Use lite model for better memory efficiency on resource-constrained environments
+        model_id = "Salesforce/blip-image-captioning-lite"
         app.logger.info(f"Downloading model from {model_id}...")
         processor = BlipProcessor.from_pretrained(model_id, use_fast=False)
         model = BlipForConditionalGeneration.from_pretrained(model_id, use_safetensors=False)
