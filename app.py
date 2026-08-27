@@ -27,21 +27,23 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+caption_pipeline = None
+
 def load_model():
     global caption_pipeline
 
     if caption_pipeline is None:
-        app.logger.info("Loading Image Captioning Model...")
+        app.logger.info("Loading BLIP model for the first time...")
 
         from transformers import pipeline
 
         caption_pipeline = pipeline(
-            task="image-to-text",
+            "image-to-text",
             model="Salesforce/blip-image-captioning-base",
-            device=-1   # CPU
+            device=-1
         )
 
-        app.logger.info("Model loaded successfully.")
+        app.logger.info("Model loaded successfully!")
 
     return caption_pipeline
 

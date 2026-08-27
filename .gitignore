@@ -1,4 +1,16 @@
-.venv/
+# Python
+venv/
 __pycache__/
-uploads/*
 *.pyc
+
+# Hugging Face cache
+.cache/
+huggingface/
+
+# Uploaded images
+uploads/*
+!uploads/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
