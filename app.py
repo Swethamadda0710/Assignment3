@@ -8,8 +8,8 @@ from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
-# ------------------ Configuration ------------------
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB
+# ---------------- Configuration ----------------
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 app.config["UPLOAD_FOLDER"] = Path("uploads")
 app.config["UPLOAD_FOLDER"].mkdir(exist_ok=True)
 
@@ -19,72 +19,58 @@ app.logger.setLevel(logging.INFO)
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 # Global model variables
-caption_processor = None
-caption_model = None
+processor = None
+model = None
 torch = None
 
 
-# ------------------ Helper Functions ------------------
+# ---------------- Helper Functions ----------------
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def load_model():
-    """Load image captioning model only once."""
-    global caption_processor, caption_model, torch
+    """Load the image caption model only once."""
+    global processor, model, torch
 
-    if caption_processor is None:
-        app.logger.info("Loading lightweight image caption model...")
+    if processor is None:
+        app.logger.info("Loading BLIP image caption model...")
 
         import torch as t
-        from transformers import (
-            VisionEncoderDecoderModel,
-            ViTImageProcessor,
-            AutoTokenizer,
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+
+        torch = t
+
+        model_name = "Salesforce/blip-image-captioning-base"
+
+        processor = BlipProcessor.from_pretrained(model_name)
+
+        model = BlipForConditionalGeneration.from_pretrained(
+            model_name,
+            low_cpu_mem_usage=True
         )
 
-        model_name = "nlpconnect/vit-gpt2-image-captioning"
-
-        caption_model = VisionEncoderDecoderModel.from_pretrained(model_name)
-        feature_extractor = ViTImageProcessor.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        caption_processor = {
-            "feature_extractor": feature_extractor,
-            "tokenizer": tokenizer,
-        }
-
-        caption_model.eval()
-        torch = t
+        model.eval()
+        model.to("cpu")
 
         app.logger.info("Model loaded successfully!")
 
-    return caption_processor, caption_model, torch
+    return processor, model, torch
 
 
 def generate_caption(image):
-    """Generate caption from uploaded image."""
     processor, model, torch = load_model()
 
-    feature_extractor = processor["feature_extractor"]
-    tokenizer = processor["tokenizer"]
-
-    pixel_values = feature_extractor(
-        images=image,
-        return_tensors="pt"
-    ).pixel_values
+    inputs = processor(images=image, return_tensors="pt")
 
     with torch.no_grad():
-        output_ids = model.generate(
-            pixel_values,
-            max_length=20,
-            num_beams=2
+        output = model.generate(
+            **inputs,
+            max_new_tokens=20,
+            num_beams=1
         )
 
-    caption = tokenizer.decode(
-        output_ids[0],
-        skip_special_tokens=True
-    ).strip()
+    caption = processor.decode(output[0], skip_special_tokens=True).strip()
 
     caption = caption.capitalize()
 
@@ -94,7 +80,7 @@ def generate_caption(image):
     return caption
 
 
-# ------------------ Routes ------------------
+# ---------------- Routes ----------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -142,7 +128,7 @@ def caption():
             image_path.unlink()
 
 
-# ------------------ Error Handlers ------------------
+# ---------------- Error Handlers ----------------
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({"error": "Page not found."}), 404
@@ -157,6 +143,6 @@ def handle_exception(e):
     return jsonify({"error": str(e)}), 500
 
 
-# ------------------ Run ------------------
+# ---------------- Run ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
