@@ -18,8 +18,10 @@ app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-# Load model only once
-caption_pipeline = None
+# Global model variables
+caption_processor = None
+caption_model = None
+torch = None
 
 
 # ------------------ Helper Functions ------------------
@@ -27,33 +29,62 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-caption_pipeline = None
-
 def load_model():
-    global caption_pipeline
+    """Load image captioning model only once."""
+    global caption_processor, caption_model, torch
 
-    if caption_pipeline is None:
-        app.logger.info("Loading BLIP model for the first time...")
+    if caption_processor is None:
+        app.logger.info("Loading lightweight image caption model...")
 
-        from transformers import pipeline
-
-        caption_pipeline = pipeline(
-            "image-to-text",
-            model="Salesforce/blip-image-captioning-base",
-            device=-1
+        import torch as t
+        from transformers import (
+            VisionEncoderDecoderModel,
+            ViTImageProcessor,
+            AutoTokenizer,
         )
+
+        model_name = "nlpconnect/vit-gpt2-image-captioning"
+
+        caption_model = VisionEncoderDecoderModel.from_pretrained(model_name)
+        feature_extractor = ViTImageProcessor.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+        caption_processor = {
+            "feature_extractor": feature_extractor,
+            "tokenizer": tokenizer,
+        }
+
+        caption_model.eval()
+        torch = t
 
         app.logger.info("Model loaded successfully!")
 
-    return caption_pipeline
+    return caption_processor, caption_model, torch
 
 
 def generate_caption(image):
-    model = load_model()
+    """Generate caption from uploaded image."""
+    processor, model, torch = load_model()
 
-    result = model(image)
+    feature_extractor = processor["feature_extractor"]
+    tokenizer = processor["tokenizer"]
 
-    caption = result[0]["generated_text"]
+    pixel_values = feature_extractor(
+        images=image,
+        return_tensors="pt"
+    ).pixel_values
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            pixel_values,
+            max_length=20,
+            num_beams=2
+        )
+
+    caption = tokenizer.decode(
+        output_ids[0],
+        skip_special_tokens=True
+    ).strip()
 
     caption = caption.capitalize()
 
@@ -78,11 +109,14 @@ def caption():
         return jsonify({"error": "Please upload an image."}), 400
 
     if not allowed_file(uploaded.filename):
-        return jsonify({"error": "Only JPG, PNG or WEBP images are allowed."}), 400
+        return jsonify({"error": "Only JPG, JPEG, PNG and WEBP images are allowed."}), 400
 
-    filename = f"{secrets.token_hex(8)}.{uploaded.filename.rsplit('.',1)[1].lower()}"
+    filename = (
+        f"{secrets.token_hex(8)}."
+        f"{uploaded.filename.rsplit('.',1)[1].lower()}"
+    )
+
     image_path = app.config["UPLOAD_FOLDER"] / filename
-
     uploaded.save(image_path)
 
     try:
@@ -91,6 +125,8 @@ def caption():
         image = Image.open(image_path).convert("RGB")
 
         caption = generate_caption(image)
+
+        app.logger.info(f"Caption generated: {caption}")
 
         return jsonify({"caption": caption})
 
