@@ -1,99 +1,69 @@
 from pathlib import Path
-import os
 import secrets
 import logging
 
 from flask import Flask, render_template, request, jsonify
-from werkzeug.exceptions import HTTPException
 from PIL import Image, UnidentifiedImageError
+from werkzeug.exceptions import HTTPException
 
-# -----------------------------
-# Flask App Configuration
-# -----------------------------
 app = Flask(__name__)
 
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB limit
-app.config["UPLOAD_FOLDER"] = Path(app.root_path) / "uploads"
+# ------------------ Configuration ------------------
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB
+app.config["UPLOAD_FOLDER"] = Path("uploads")
 app.config["UPLOAD_FOLDER"].mkdir(exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-app.logger = logger
+app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-# Global model cache
-processor = None
-model = None
-device = None
-torch = None
+# Load model only once
+caption_pipeline = None
 
 
-# -----------------------------
-# Helper Functions
-# -----------------------------
+# ------------------ Helper Functions ------------------
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def load_model():
-    """Load BLIP model only once."""
-    global processor, model, device, torch
+    global caption_pipeline
 
-    if processor is not None and model is not None:
-        return
+    if caption_pipeline is None:
+        app.logger.info("Loading Image Captioning Model...")
 
-    app.logger.info("Loading BLIP Image Captioning Model...")
+        from transformers import pipeline
 
-    os.environ["USE_TF"] = "0"
+        caption_pipeline = pipeline(
+            task="image-to-text",
+            model="Salesforce/blip-image-captioning-base",
+            device=-1   # CPU
+        )
 
-    import torch as t
-    from transformers import BlipProcessor, BlipForConditionalGeneration
+        app.logger.info("Model loaded successfully.")
 
-    model_id = "Salesforce/blip-image-captioning-base"
-
-    processor = BlipProcessor.from_pretrained(model_id)
-    model = BlipForConditionalGeneration.from_pretrained(model_id)
-
-    device = "cuda" if t.cuda.is_available() else "cpu"
-
-    model.to(device)
-    model.eval()
-
-    torch = t
-
-    app.logger.info(f"BLIP model loaded successfully on {device}")
+    return caption_pipeline
 
 
 def generate_caption(image):
-    """Generate caption from uploaded image."""
+    model = load_model()
 
-    load_model()
+    result = model(image)
 
-    inputs = processor(images=image, return_tensors="pt")
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    caption = result[0]["generated_text"]
 
-    with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=25
-        )
+    caption = caption.capitalize()
 
-    caption = processor.decode(output[0], skip_special_tokens=True).strip()
-
-    if caption:
-        caption = caption.capitalize()
-        if not caption.endswith("."):
-            caption += "."
+    if not caption.endswith("."):
+        caption += "."
 
     return caption
 
 
-# -----------------------------
-# Routes
-# -----------------------------
+# ------------------ Routes ------------------
 @app.route("/")
-def home():
+def index():
     return render_template("index.html")
 
 
@@ -106,7 +76,7 @@ def caption():
         return jsonify({"error": "Please upload an image."}), 400
 
     if not allowed_file(uploaded.filename):
-        return jsonify({"error": "Only JPG, JPEG, PNG and WEBP images are allowed."}), 400
+        return jsonify({"error": "Only JPG, PNG or WEBP images are allowed."}), 400
 
     filename = f"{secrets.token_hex(8)}.{uploaded.filename.rsplit('.',1)[1].lower()}"
     image_path = app.config["UPLOAD_FOLDER"] / filename
@@ -120,8 +90,6 @@ def caption():
 
         caption = generate_caption(image)
 
-        app.logger.info(f"Caption Generated: {caption}")
-
         return jsonify({"caption": caption})
 
     except UnidentifiedImageError:
@@ -132,24 +100,14 @@ def caption():
         return jsonify({"error": str(e)}), 500
 
     finally:
-        try:
-            if image_path.exists():
-                image_path.unlink()
-        except Exception as e:
-            app.logger.warning(f"Couldn't delete temp image: {e}")
+        if image_path.exists():
+            image_path.unlink()
 
 
-# -----------------------------
-# Error Handlers
-# -----------------------------
+# ------------------ Error Handlers ------------------
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({"error": "Page not found."}), 404
-
-
-@app.errorhandler(500)
-def server_error(e):
-    return jsonify({"error": "Internal Server Error."}), 500
 
 
 @app.errorhandler(Exception)
@@ -157,12 +115,10 @@ def handle_exception(e):
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
 
-    app.logger.exception("Unhandled exception")
+    app.logger.exception("Unexpected error")
     return jsonify({"error": str(e)}), 500
 
 
-# -----------------------------
-# Main
-# -----------------------------
+# ------------------ Run ------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
