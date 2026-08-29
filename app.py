@@ -2,18 +2,17 @@ from pathlib import Path
 import os
 import secrets
 import logging
-import gc
+import requests
 
 from flask import Flask, render_template, request, jsonify
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 
-# Hugging Face cache
-os.environ["HF_HOME"] = "/tmp/huggingface"
-
+# Flask App
 app = Flask(__name__)
 
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+# Configuration
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB upload limit
 app.config["UPLOAD_FOLDER"] = Path("/tmp/uploads")
 app.config["UPLOAD_FOLDER"].mkdir(parents=True, exist_ok=True)
 
@@ -22,59 +21,46 @@ app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-processor = None
-model = None
-tokenizer = None
-torch = None
+# Hugging Face Model API
+API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
 
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def load_model():
-    global processor, model, tokenizer, torch
-
-    if model is None:
-        app.logger.info("Loading lightweight image caption model...")
-
-        import torch as t
-        from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
-
-        torch = t
-
-        MODEL_NAME = "nlpconnect/vit-gpt2-image-captioning"
-
-        model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
-        processor = ViTImageProcessor.from_pretrained(MODEL_NAME)
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-        model.to("cpu")
-        model.eval()
-
-        app.logger.info("Model loaded successfully.")
-
-    return processor, tokenizer, model, torch
-
-
 def generate_caption(image):
-    processor, tokenizer, model, torch = load_model()
+    """
+    Sends image to Hugging Face Inference API and returns caption.
+    """
 
-    pixel_values = processor(images=image, return_tensors="pt").pixel_values
+    token = os.getenv("HF_TOKEN")
 
-    with torch.inference_mode():
-        output_ids = model.generate(
-            pixel_values,
-            max_length=20,
-            num_beams=2
-        )
+    if not token:
+        raise Exception("HF_TOKEN environment variable not found.")
 
-    caption = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+    temp_path = "/tmp/temp_image.jpg"
+    image.save(temp_path)
 
-    del pixel_values, output_ids
-    gc.collect()
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    with open(temp_path, "rb") as img:
+        response = requests.post(API_URL, headers=headers, data=img)
+
+    if response.status_code != 200:
+        raise Exception(response.text)
+
+    result = response.json()
+
+    if isinstance(result, list):
+        caption = result[0]["generated_text"]
+    else:
+        caption = result["generated_text"]
 
     caption = caption.capitalize()
+
     if not caption.endswith("."):
         caption += "."
 
@@ -88,6 +74,7 @@ def index():
 
 @app.route("/caption", methods=["POST"])
 def caption():
+
     uploaded = request.files.get("image")
 
     if uploaded is None or uploaded.filename == "":
@@ -102,8 +89,12 @@ def caption():
     uploaded.save(image_path)
 
     try:
+        app.logger.info(f"Processing image: {uploaded.filename}")
+
         image = Image.open(image_path).convert("RGB")
+
         caption = generate_caption(image)
+
         return jsonify({"caption": caption})
 
     except UnidentifiedImageError:
@@ -120,9 +111,11 @@ def caption():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
+
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
 
+    app.logger.exception("Unexpected Error")
     return jsonify({"error": str(e)}), 500
 
 
