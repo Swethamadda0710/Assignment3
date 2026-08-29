@@ -22,7 +22,7 @@ app.logger.setLevel(logging.INFO)
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 # Hugging Face Router API
-API_URL = "https://router.huggingface.co/hf-inference/models/Salesforce/blip-image-captioning-base"
+API_URL = "https://router.huggingface.co/hf-inference/models/nlpconnect/vit-gpt2-image-captioning"
 
 
 # ----------------------------
