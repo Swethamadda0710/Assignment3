@@ -2,15 +2,17 @@ from pathlib import Path
 import os
 import secrets
 import logging
-import gc
+import requests
 
 from flask import Flask, render_template, request, jsonify
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 
+# Flask App
 app = Flask(__name__)
 
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+# Configuration
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB upload limit
 app.config["UPLOAD_FOLDER"] = Path("/tmp/uploads")
 app.config["UPLOAD_FOLDER"].mkdir(parents=True, exist_ok=True)
 
@@ -19,52 +21,71 @@ app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-captioner = None
+# Hugging Face Router API
+API_URL = "https://router.huggingface.co/hf-inference/models/Salesforce/blip-image-captioning-base"
 
 
+# ----------------------------
+# Check allowed file extensions
+# ----------------------------
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def load_model():
-    global captioner
+# ----------------------------
+# Generate Caption
+# ----------------------------
+def generate_caption(image):
 
-    if captioner is None:
-        app.logger.info("Loading lightweight image caption model...")
+    token = os.environ.get("HF_TOKEN")
 
-        from transformers import pipeline
+    if not token:
+        raise Exception("HF_TOKEN environment variable not found.")
 
-        captioner = pipeline(
-            "image-to-text",
-            model="ydshieh/vit-gpt2-coco-en",
-            device=-1  # CPU
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    temp_path = "/tmp/temp.jpg"
+    image.save(temp_path)
+
+    with open(temp_path, "rb") as img:
+        response = requests.post(
+            API_URL,
+            headers=headers,
+            data=img,
+            timeout=60
         )
 
-        app.logger.info("Model loaded successfully.")
+    response.raise_for_status()
 
-    return captioner
+    result = response.json()
 
+    # Extract caption
+    if isinstance(result, list):
+        caption = result[0]["generated_text"]
+    else:
+        caption = result["generated_text"]
 
-def generate_caption(image):
-    captioner = load_model()
-
-    result = captioner(image)
-
-    caption = result[0]["generated_text"].strip().capitalize()
+    caption = caption.capitalize()
 
     if not caption.endswith("."):
         caption += "."
 
-    gc.collect()
-
     return caption
 
 
+# ----------------------------
+# Home Page
+# ----------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
+# ----------------------------
+# Caption API
+# ----------------------------
 @app.route("/caption", methods=["POST"])
 def caption():
 
@@ -93,6 +114,10 @@ def caption():
     except UnidentifiedImageError:
         return jsonify({"error": "Invalid image file."}), 400
 
+    except requests.exceptions.HTTPError as e:
+        app.logger.exception("Hugging Face API error")
+        return jsonify({"error": f"Hugging Face API Error: {e.response.text}"}), 500
+
     except Exception as e:
         app.logger.exception("Caption generation failed.")
         return jsonify({"error": str(e)}), 500
@@ -102,15 +127,21 @@ def caption():
             image_path.unlink()
 
 
+# ----------------------------
+# Global Error Handler
+# ----------------------------
 @app.errorhandler(Exception)
 def handle_exception(e):
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
 
-    app.logger.exception("Unexpected error")
+    app.logger.exception("Unexpected Error")
     return jsonify({"error": str(e)}), 500
 
 
+# ----------------------------
+# Run Flask
+# ----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
