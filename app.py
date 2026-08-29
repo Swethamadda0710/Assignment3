@@ -2,17 +2,15 @@ from pathlib import Path
 import os
 import secrets
 import logging
-import requests
+import gc
 
 from flask import Flask, render_template, request, jsonify
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 
-# Flask App
 app = Flask(__name__)
 
-# Configuration
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB upload limit
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 app.config["UPLOAD_FOLDER"] = Path("/tmp/uploads")
 app.config["UPLOAD_FOLDER"].mkdir(parents=True, exist_ok=True)
 
@@ -21,48 +19,43 @@ app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
-# Hugging Face Model API
-API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+captioner = None
 
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def load_model():
+    global captioner
+
+    if captioner is None:
+        app.logger.info("Loading lightweight image caption model...")
+
+        from transformers import pipeline
+
+        captioner = pipeline(
+            "image-to-text",
+            model="ydshieh/vit-gpt2-coco-en",
+            device=-1  # CPU
+        )
+
+        app.logger.info("Model loaded successfully.")
+
+    return captioner
+
+
 def generate_caption(image):
-    """
-    Sends image to Hugging Face Inference API and returns caption.
-    """
+    captioner = load_model()
 
-    token = os.getenv("HF_TOKEN")
+    result = captioner(image)
 
-    if not token:
-        raise Exception("HF_TOKEN environment variable not found.")
-
-    temp_path = "/tmp/temp_image.jpg"
-    image.save(temp_path)
-
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-
-    with open(temp_path, "rb") as img:
-        response = requests.post(API_URL, headers=headers, data=img)
-
-    if response.status_code != 200:
-        raise Exception(response.text)
-
-    result = response.json()
-
-    if isinstance(result, list):
-        caption = result[0]["generated_text"]
-    else:
-        caption = result["generated_text"]
-
-    caption = caption.capitalize()
+    caption = result[0]["generated_text"].strip().capitalize()
 
     if not caption.endswith("."):
         caption += "."
+
+    gc.collect()
 
     return caption
 
@@ -111,11 +104,10 @@ def caption():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
 
-    app.logger.exception("Unexpected Error")
+    app.logger.exception("Unexpected error")
     return jsonify({"error": str(e)}), 500
 
 
