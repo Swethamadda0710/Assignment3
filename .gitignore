@@ -1,16 +1,6 @@
-# Python
 venv/
 __pycache__/
-*.pyc
-
-# Hugging Face cache
-.cache/
-huggingface/
-
-# Uploaded images
-uploads/*
-!uploads/.gitkeep
-
-# OS files
-.DS_Store
-Thumbs.db
+uploads/
+*.pt
+*.bin
+*.safetensors

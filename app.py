@@ -2,19 +2,20 @@ from pathlib import Path
 import os
 import secrets
 import logging
+import gc
 
 from flask import Flask, render_template, request, jsonify
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 
-# Hugging Face cache folder
+# Hugging Face cache
 os.environ["HF_HOME"] = "/tmp/huggingface"
 
 app = Flask(__name__)
 
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
-app.config["UPLOAD_FOLDER"] = Path("uploads")
-app.config["UPLOAD_FOLDER"].mkdir(exist_ok=True)
+app.config["UPLOAD_FOLDER"] = Path("/tmp/uploads")
+app.config["UPLOAD_FOLDER"].mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
 app.logger.setLevel(logging.INFO)
@@ -23,6 +24,7 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 processor = None
 model = None
+tokenizer = None
 torch = None
 
 
@@ -31,50 +33,48 @@ def allowed_file(filename):
 
 
 def load_model():
-    global processor, model, torch
+    global processor, model, tokenizer, torch
 
-    if processor is None:
-        app.logger.info("Loading BLIP caption model...")
+    if model is None:
+        app.logger.info("Loading lightweight image caption model...")
 
         import torch as t
-        from transformers import BlipProcessor, BlipForConditionalGeneration
+        from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
 
         torch = t
 
-        MODEL_NAME = "Salesforce/blip-image-captioning-base"
+        MODEL_NAME = "nlpconnect/vit-gpt2-image-captioning"
 
-        processor = BlipProcessor.from_pretrained(MODEL_NAME)
-
-        model = BlipForConditionalGeneration.from_pretrained(
-            MODEL_NAME,
-            low_cpu_mem_usage=True
-        )
+        model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
+        processor = ViTImageProcessor.from_pretrained(MODEL_NAME)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
         model.to("cpu")
         model.eval()
 
-        app.logger.info("BLIP model loaded successfully.")
+        app.logger.info("Model loaded successfully.")
 
-    return processor, model, torch
+    return processor, tokenizer, model, torch
 
 
 def generate_caption(image):
-    processor, model, torch = load_model()
+    processor, tokenizer, model, torch = load_model()
 
-    inputs = processor(images=image, return_tensors="pt")
+    pixel_values = processor(images=image, return_tensors="pt").pixel_values
 
-    with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=15,
-            num_beams=1,
-            do_sample=False
+    with torch.inference_mode():
+        output_ids = model.generate(
+            pixel_values,
+            max_length=20,
+            num_beams=2
         )
 
-    caption = processor.decode(output[0], skip_special_tokens=True).strip()
+    caption = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+
+    del pixel_values, output_ids
+    gc.collect()
 
     caption = caption.capitalize()
-
     if not caption.endswith("."):
         caption += "."
 
@@ -88,7 +88,6 @@ def index():
 
 @app.route("/caption", methods=["POST"])
 def caption():
-
     uploaded = request.files.get("image")
 
     if uploaded is None or uploaded.filename == "":
@@ -103,12 +102,8 @@ def caption():
     uploaded.save(image_path)
 
     try:
-        app.logger.info(f"Processing image: {uploaded.filename}")
-
         image = Image.open(image_path).convert("RGB")
-
         caption = generate_caption(image)
-
         return jsonify({"caption": caption})
 
     except UnidentifiedImageError:
@@ -128,16 +123,9 @@ def handle_exception(e):
     if isinstance(e, HTTPException):
         return jsonify({"error": e.description}), e.code
 
-    app.logger.exception("Unexpected error")
     return jsonify({"error": str(e)}), 500
 
 
-# Load model when Render starts
-try:
-    load_model()
-except Exception as e:
-    app.logger.error(f"Startup model loading failed: {e}")
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
